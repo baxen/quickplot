@@ -23,7 +23,7 @@ import rootpy.io.pickler as pickle
 
 from rootpy import asrootpy
 from rootpy.tree import Tree, TreeChain
-from itertools import izip
+from itertools import izip, izip_longest
 from seaborn.apionly import color_palette, husl_palette
 from rootpy.plotting import Hist, Hist2D, Profile, Graph
 from rootpy.io import root_open
@@ -336,20 +336,29 @@ def retrieve(sample_args, variable_args, selection='', var_priority=False, name=
 
 def retrieve_all(samples, variables, selection=""):
     hists = []
-    for sample in samples:
+    sv_pairs = izip_longest(samples, variables, fillvalue = samples[-1] if len(variables) > len(samples) else variables[-1])
+    for sample, variable in sv_pairs:
         with open(samples_json) as f:
             sample_args = json.load(f)[sample]
-        for variable in variables:
-            name = "_".join((sample, variable))
-            with open(variables_json) as f:
-                variable_args = json.load(f)[variable]
-            match = re.search('\[:(\d+)\]', variable_args['variable'])
-            if match:
-                for i in xrange(int(match.group(1))):
-                    variable_args['variable'] = re.sub('\[(:?)\d+\]', '[{0}]'.format(i), variable_args['variable'])
-                    hists.append(retrieve(sample_args, variable_args.copy(), selection, len(variables) > len(samples)).Clone(name))
-            else:
-                hists.append(retrieve(sample_args, variable_args, selection, len(variables) > len(samples)).Clone(name))
+        with open(variables_json) as f:
+            variable_args = json.load(f)[variable]
+        name = "_".join((sample, variable))
+
+        # ----------------------------------------
+        # Special Cases
+        # ----------------------------------------
+        match = re.search('\[:(\d+)\]', variable_args['variable'])
+        if match:
+            for i in xrange(int(match.group(1))):
+                variable_args['variable'] = re.sub('\[(:?)\d+\]', '[{0}]'.format(i), variable_args['variable'])
+                hists.append(retrieve(sample_args, variable_args.copy(), selection, len(variables) > len(samples)).Clone(name))
+
+        # ----------------------------------------
+        # Default Case
+        # ----------------------------------------
+        else:
+            hists.append(retrieve(sample_args, variable_args, selection, len(variables) > len(samples)).Clone(name))
+
     return hists
 
     
