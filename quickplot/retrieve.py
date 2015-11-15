@@ -281,7 +281,7 @@ def _retrieve_ntuple(variable, bins, subsamples, selections='', weights=1.0, tre
 
 
 
-def retrieve(sample_args, variable_args, selection='', var_priority=False, name=''):
+def retrieve(sample_args, variable_args, selection='', name=''):
     """
     Get a histogram filled with variable from sample, both stored in the configuration jsons.
     The histogram is filled, selected, styled, and weighted according to json information.
@@ -290,18 +290,14 @@ def retrieve(sample_args, variable_args, selection='', var_priority=False, name=
     as necessary.
     """
 
-    # Combine argument dictionaries, overwriting based on priority
-    args = sample_args.copy() if var_priority else variable_args.copy()
-    args.update(variable_args if var_priority else sample_args)
+    # Combine argument dictionaries
+    args = sample_args.copy()
+    args.update(variable_args)
     
     # ------------------------------------------------------------
     # Join Arguments from Sample+Variable Args
     # ------------------------------------------------------------
-    args['selection'] = join_selections(variable_args['selection'], sample_args['selection'])
     args['selection'] = join_selections(args['selection'], selection)
-    args['title'] = join_labels(variable_args['title'], sample_args['title'])
-    # Histogram labels are currently _joined_, might want to leave overwritten...
-    args['label'] = join_labels(variable_args['label'], sample_args['label'])
 
     bins = args["bins"]
     if bins: # Bins provided, means we are reading an ntuple
@@ -334,30 +330,48 @@ def retrieve(sample_args, variable_args, selection='', var_priority=False, name=
     return hist
 
 
-def retrieve_all(samples, variables, selection=""):
+def retrieve_all(variables, selection=""):
     hists = []
-    sv_pairs = izip_longest(samples, variables, fillvalue = samples[-1] if len(variables) > len(samples) else variables[-1])
-    for sample, variable in sv_pairs:
-        with open(samples_json) as f:
-            sample_args = json.load(f)[sample]
+    for variable in variables:
+        # Grab variable dictionary, some are lists over the samples
+        if ":" in variable:
+            variable, sample = variable.split(":")
+        else:
+            sample = None
         with open(variables_json) as f:
             variable_args = json.load(f)[variable]
-        name = "_".join((sample, variable))
 
-        # ----------------------------------------
-        # Special Cases
-        # ----------------------------------------
-        match = re.search('\[:(\d+)\]', variable_args['variable'])
-        if match:
-            for i in xrange(int(match.group(1))):
-                variable_args['variable'] = re.sub('\[(:?)\d+\]', '[{0}]'.format(i), variable_args['variable'])
-                hists.append(retrieve(sample_args, variable_args.copy(), selection, len(variables) > len(samples)).Clone(name))
-
-        # ----------------------------------------
-        # Default Case
-        # ----------------------------------------
+        # Variable can look like "varname:sname" to specifiy one sample
+        # or "varname" to loop over all subsamples
+        if sample:
+            indices = [variable_args['sample'].index(sample)]
         else:
-            hists.append(retrieve(sample_args, variable_args, selection, len(variables) > len(samples)).Clone(name))
+            indices = range(len(variable_args['sample']))
+
+        # For each plottable (a combination of variable, sample) get the arguments
+        for i in indices:
+            tmp_args = variable_args.copy()
+            # Flatten the arguments to use just the value at the current index
+            for key,arg in tmp_args.iteritems():
+                if is_listy(arg): tmp_args[key] = arg[i]
+            sample = tmp_args['sample']
+            with open(samples_json) as f:
+                sample_args = json.load(f)[sample]
+            name = "_".join((sample, variable))
+            # ----------------------------------------
+            # Special Cases
+            # ----------------------------------------
+            match = re.search('\[:(\d+)\]', tmp_args['variable'])
+            if match:
+                for i in xrange(int(match.group(1))):
+                    tmp_args['variable'] = re.sub('\[(:?)\d+\]', '[{0}]'.format(i), tmp_args['variable'])
+                    hists.append(retrieve(sample_args, tmp_args.copy(), selection))
+    
+            # ----------------------------------------
+            # Default Case
+            # ----------------------------------------
+            else:
+                hists.append(retrieve(sample_args, tmp_args, selection))
 
     return hists
 
