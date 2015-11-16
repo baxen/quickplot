@@ -619,7 +619,7 @@ def saveable(selection):
 def main(args):
     parser = argparse.ArgumentParser('Create a plot from ntuples, using variable and sample lookup information from spreadsheets. Any additional arguments are taken as overrides for canvas options. (e.g. --title "Title")')
     parser.add_argument('output', nargs="?", help='Name of the plot to save.')
-    parser.add_argument('variables', nargs='*', help='The names of variables to add to the plot. Each variable gets a separate graphic.')
+    parser.add_argument('--variables', nargs='*', help='The names of variables to add to the plot. Each variable gets a separate graphic.')
     parser.add_argument('--canvas', help="Canvas to use for the plot, if unspecified will start with a blank canvas.")
     parser.add_argument('--selection', help='Additional global selection to apply for all loaded data.')
     parser.add_argument('--batch', help='Specify a file which contains a set of arguments to run on each line.')
