@@ -81,6 +81,7 @@ from matplotlib.colors import LogNorm
 from rootpy.plotting.style import get_style, set_style
 from rootpy.io import root_open
 from rootpy.tree import Tree, TreeChain
+from rootpy.plotting import Hist
 
 from itertools import izip, chain
 
@@ -112,6 +113,23 @@ def make_iterable(x):
     if not is_listy(x):
         return [x]
     return x
+
+def histify(plottable):
+    if 'Hist' in plottable.__class__.__name__:
+        return plottable
+    elif 'Graph' in plottable.__class__.__name__:
+        bins = [(x-err[0],x+err[1]) for x,err in izip(plottable.x(), plottable.xerr())]
+        bins = [x[0] for x in bins] + [bins[-1][1]]
+        hist = Hist(bins)
+        for i,y,yerr in izip(hist.bins_range(), plottable.y(), plottable.yerr()):
+            hist.SetBinContent(i, y)
+            hist.SetBinError(i, 0.5*(yerr[0]+yerr[1]))
+        # Transfer all the graphic properties
+        hist.decorate(plottable)
+        hist.title = plottable.title
+        return hist
+    else:
+        raise TypeError("Don't know how to create a histogram from " + plottable.__class__.__name__)
 
 """
 def set_font(font="helvetica"):
@@ -241,6 +259,14 @@ def setup_axes(*axes, **kwargs):
     if 'xticks' in kwargs and kwargs['xticks'] and ('xticklabels' not in kwargs or not kwargs['xticklabels']):
         kwargs['xticklabels'] = kwargs['xticks']
 
+    if 'yticks' in kwargs and kwargs['yticks'] and ('yticklabels' not in kwargs or not kwargs['yticklabels']):
+        kwargs['yticklabels'] = kwargs['yticks']
+
+    if 'xticklabels' in kwargs and kwargs['xticklabels'] == 'jes_cor':
+        kwargs['xticklabels'] = ['30', '300\n' +r'$|\eta| < 0.3$', '2500', '30', '300\n' +r'$0.3 < |\eta| < 0.8$', '2500']
+    if 'yticklabels' in kwargs and kwargs['yticklabels'] == 'jes_cor':
+        kwargs['yticklabels'] = ['30', '300', '2500', '30', '300', '2500']
+
     try:
         kwargs['xticks'] = [float(x) for x in kwargs['xticks'].split()]
     except (AttributeError, KeyError):
@@ -306,7 +332,8 @@ def setup_axes(*axes, **kwargs):
         if ax.get_xscale() != 'log':
             ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
         if ax.get_yscale() != 'log':
-            ax.yaxis.set_major_locator(ticker.MaxNLocator(5, prune='upper' if (not ax.ratio and not ax.primary) else None))
+            if 'yticks' not in kwargs or not kwargs['yticks']:
+                ax.yaxis.set_major_locator(ticker.MaxNLocator(5, prune='upper' if (not ax.ratio and not ax.primary) else None))
             ax.yaxis.set_minor_locator(ticker.AutoMinorLocator())
         ax.yaxis.set_label_coords(-0.15,1)
         for spine in ax.spines.values(): 
@@ -407,8 +434,8 @@ def plot(draw, name, hists, **kwargs):
 
     for ax, group in izip(axes, hgroups):
         draw(ax, group)
-        legend(ax, group, **kwargs)
         if ax.primary: text(ax, **kwargs)
+        legend(ax, group, **kwargs)
 
     # Setup axes last so that nothing gets overwritten
     setup_axes(*axes, **kwargs)
@@ -485,26 +512,32 @@ def step(ax, hists, **kwargs):
 
     kwargs are passed to Axes.plot
     """
-    if is_listy(hists):
-        for h in hists:
-            _step(ax, h, **kwargs)
-    else:
-        _step(ax, hists, **kwargs)
+    for h in make_iterable(hists):
+        _step(ax, h, **kwargs)
+
+def steperr(ax, hists, **kwargs):
+    step(ax, hists, **kwargs)
+    for h in make_iterable(hists):
+        eb = rplt.errorbar(hists, axes=ax, fmt='none', capsize=0, xerr=None, label='', elinewidth=h.linewidth)
+        eb[-1][0].set_linestyle(h.linestyle) 
 
 def hist(ax, hists, **kwargs):
     defaults = {'fill':None,
-                'capsize':0}
+                'capsize':0,
+                'stacked':False}
     defaults.update(kwargs)
-    rplt.hist(hists, axes=ax, **defaults)
+    for hist in make_iterable(hists):
+        # Need the histify syntax to handle graphs
+        rplt.hist(histify(hist), axes=ax, **defaults)
 
 def herr(ax, hists, **kwargs):
     defaults = {'marker':None,
-                'capsize':0}
+                'capsize':0,
+                'stacked':False}
     defaults.update(kwargs)
-    rplt.hist(hists, axes=ax, **defaults)
-    ebargs = {}
+    hist(ax, hists, **defaults)
     for h in make_iterable(hists):
-        eb = rplt.errorbar(hists, axes=ax, fmt='none', capsize=0, xerr=None, label='', elinewidth=h.linewidth)
+        eb = rplt.errorbar(hists, axes=ax, fmt='none', xerr=None, label='', capsize=0, elinewidth=h.linewidth)
         eb[-1][0].set_linestyle(h.linestyle) 
         
 def stack(ax, hists, **kwargs):
@@ -526,7 +559,8 @@ _plot_functions = {"errorbar":errorbar,
                    "herr":herr,
                    "stack":stack,
                    "band":band,
-                   "step":step}
+                   "step":step,
+                   "steperr":steperr}
 
 def draw1d(ax, hists):
     stacked = [h for h in hists if h.drawstyle == 'stack']
@@ -538,6 +572,9 @@ def draw1d(ax, hists):
             raise PlotError("Do not recognize drawstyle: " + h.drawstyle)
         _plot_functions[h.drawstyle](ax, h)
 
+
+def draw2d(ax, hists):
+    hist2d(ax, hists[0])
 
 # ----------------------------------------
 # ROOT Helpers
@@ -580,10 +617,10 @@ def saveable(selection):
 
 
 def main(args):
-    parser = argparse.ArgumentParser('Create a plot from ntuples, using variable and sample lookup information from spreadsheets. Any additional arguments are taken as overrides for canvas options. (e.g. --title "New Title")')
+    parser = argparse.ArgumentParser('Create a plot from ntuples, using variable and sample lookup information from spreadsheets. Any additional arguments are taken as overrides for canvas options. (e.g. --title "Title")')
     parser.add_argument('output', nargs="?", help='Name of the plot to save.')
-    parser.add_argument('canvas', nargs="?", help="Canvas to use for the plot.")
-    parser.add_argument('--variables', nargs='+', help='The names of variables to add to the plot. Each variable gets a separate graphic.')
+    parser.add_argument('variables', nargs='*', help='The names of variables to add to the plot. Each variable gets a separate graphic.')
+    parser.add_argument('--canvas', help="Canvas to use for the plot, if unspecified will start with a blank canvas.")
     parser.add_argument('--selection', help='Additional global selection to apply for all loaded data.')
     parser.add_argument('--batch', help='Specify a file which contains a set of arguments to run on each line.')
 
@@ -591,8 +628,8 @@ def main(args):
 
     extras = dict(zip([key.replace('--','') for key in extras[:-1:2]], extras[1::2]))
 
-    if not args.output and not args.batch:
-        raise PlotError("Must provide an output name for the saved plot or a batch file to run on.")
+    if (not args.output or not len(args.variables)) and not args.batch:
+        raise PlotError("Must provide an output name and variable for the plot or a batch file to run on.")
 
     if args.batch:
         with open(args.batch) as f:
@@ -608,10 +645,13 @@ def main(args):
 
     hists = retrieve.retrieve_all(args.variables, args.selection)
 
-    with open(canvas_json) as f:    
-        canvas = json.load(f)[args.canvas]
-
-    canvas.update(extras)
+    if args.canvas:
+        with open(canvas_json) as f:    
+            canvas = json.load(f)[args.canvas]
+        canvas.update(extras)
+        plot_args = canvas
+    else:
+        plot_args = extras
 
     # ----------------------------------------
     # Select Draw Function and Plot
@@ -622,7 +662,7 @@ def main(args):
         draw_function = draw1d
 
     # Create figure
-    plot(draw_function, args.output, hists, **canvas)
+    plot(draw_function, args.output, hists, **plot_args)
     
 
 if __name__ == "__main__":
