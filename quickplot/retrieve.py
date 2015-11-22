@@ -13,6 +13,7 @@ the cache.root file if you change the ntuple files (those are assumed static).
 
 import os
 import re
+import sys
 import json
 import glob
 import types
@@ -20,6 +21,8 @@ import shutil
 import atexit
 import argparse
 import rootpy.io.pickler as pickle
+
+from helpers import not_empty
 
 from rootpy import asrootpy
 from rootpy.tree import Tree, TreeChain
@@ -125,7 +128,7 @@ def load(hname, path):
     return hists[0]
 
 
-def fill(hist, path, variable, selection="", options="", weight=1.0, tree='ntupOutput'):
+def fill(hist, path, variable, selection="", options="", weight=1.0):
     """
     Fill hist with variable from the ntuple stored in all files found from expanding path.
 
@@ -141,6 +144,15 @@ def fill(hist, path, variable, selection="", options="", weight=1.0, tree='ntupO
 
     print variable, selection
     
+    files = collect_files(path)
+    # Test first file to find the tree name
+    possible_trees = ['outputTree', 'ntupOutput', 'CollectionTree']
+    with root_open(files[0]) as tmp:
+        for tree in possible_trees:
+            if tmp.find_key(tree):
+                break
+        else:
+            raise IOError("Could not find a valid tree in the specified root files.")
     chain = TreeChain(tree, collect_files(path))
     chain.Draw(variable, selection=selection, options=options, hist=hist)
     return hist
@@ -193,7 +205,7 @@ def _retrieve_hist(variable, subsamples, weights=1.0, efficiency=None):
     return hist
 
 
-def _retrieve_ntuple(variable, bins, subsamples, selections='', weights=1.0, tree='ntupOutput', profile=False, efficiency=None):
+def _retrieve_ntuple(variable, bins, subsamples, selections='', weights=1.0, profile=False, efficiency=None):
     """
     Internal function to retrieve histogram from tree after variable information is expanded.
     
@@ -244,7 +256,7 @@ def _retrieve_ntuple(variable, bins, subsamples, selections='', weights=1.0, tre
 
     # Fill for each sub sample
     for h,s,sel,weight in izip(hists, subsamples, selections, weights):
-        fill(h, s, variable, selection=sel, options=options, weight=weight, tree=tree)
+        fill(h, s, variable, selection=sel, options=options, weight=weight)
 
 
     # Combine if more than one sub sample, weights already applied
@@ -263,7 +275,7 @@ def _retrieve_ntuple(variable, bins, subsamples, selections='', weights=1.0, tre
         else:
             nums = [Hist(*bins) for s in subsamples]
         for n,s,sel,weight in izip(nums, subsamples, selections, weights):
-            fill(n, s, variable, selection=join_selections(sel,efficiency), weight=weight, tree=tree)
+            fill(n, s, variable, selection=join_selections(sel,efficiency), weight=weight)
         if len(nums) > 1:
             map(nums[0].Add, nums[1:])
         num = nums[0]
@@ -326,7 +338,8 @@ def retrieve(sample_args, variable_args, selection='', name=''):
 
     # Special cases for arguments
     hist.title = args['label']
-
+    hist.cmap = args['cmap']
+    
     return hist
 
 
@@ -346,7 +359,7 @@ def retrieve_all(variables, selection=""):
         if sample:
             indices = [variable_args['sample'].index(sample)]
         else:
-            indices = range(len(variable_args['sample']))
+            indices = range(len(make_iterable(variable_args['sample'])))
 
         # For each plottable (a combination of variable, sample) get the arguments
         for i in indices:

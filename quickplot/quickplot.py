@@ -24,6 +24,8 @@ import matplotlib
 matplotlib.use('PDF')
 
 import retrieve
+from helpers import not_empty
+from math import sqrt
 
 # Right now this uses an adaptable system:
 #   Full latex support
@@ -131,6 +133,16 @@ def histify(plottable):
     else:
         raise TypeError("Don't know how to create a histogram from " + plottable.__class__.__name__)
 
+def sqrt_hist(hist):
+    hist = hist.Clone()
+    for i in hist.bins_range():
+        rel_unc = hist.GetBinError(i)/hist.GetBinContent(i)
+        hist.SetBinContent(i,sqrt(hist.GetBinContent(i)))
+        hist.SetBinError(i, hist.GetBinContent(i) * rel_unc * .05)
+    return hist
+        
+        
+
 """
 def set_font(font="helvetica"):
     fonts = {"helvetica": '\setallmainfonts(Digits,Latin,Greek)[Path = {0}, BoldFont={{HelveticaBold}}, ItalicFont={{HelveticaOblique}}, BoldItalicFont={{HelveticaBoldOblique}}]{{Helvetica}}'.format(fontdir),
@@ -187,13 +199,32 @@ def build_axes(ratio=False, double=False, **kwargs):
     return fig, axes
 
 
-def group_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
+def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
     """
-    Group histograms to match the setup created by build_axes.
+    Process and group histograms to match the setup created by build_axes.
 
     kwargs are ignored
     """
     
+    # Processing of hists prior to ratio
+    for j,hist in enumerate(hists):
+        if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):
+            index = int(kwargs['xefficiency']) if not_empty(kwargs, 'xefficiency') else int(kwargs['xinefficiency'])
+            num = hist.Clone()
+            for x in num.bins_range(overflow=True):
+                if index < 0:
+                    # Integral up to the value
+                    y,yerr = hist.integral(xbin2=x, error=True, overflow=True)
+                else:
+                    # Integral starting at the value
+                    y,yerr = hist.integral(xbin1=x, error=True, overflow=True) 
+                num.SetBinContent(x,y)
+                num.SetBinError(x,yerr)
+            hists[j] = num
+        if not_empty(kwargs, 'overflow') and kwargs['overflow']:
+            # Add overflow to last bin for plotting
+            hist[hist.bins_range()[-1]] += hist[hist.bins_range(overflow=True)[-1]]
+
     # If two axes, half go on each in order
     if double:
         hgroups = [hists[:len(hists)/2], hists[len(hists)/2:]]
@@ -201,9 +232,25 @@ def group_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
         hgroups = [hists]
     
     # If ratio, create a ratio from each hist by dividing by the histogram at rindex for each group
-    if ratio:
-        hgroups.append(sum(([h/group[rindex] for i,h in enumerate(group) if i != rindex] for group in hgroups), []))
+    if ratio and not_empty(kwargs, "ratio_sb") and kwargs["ratio_sb"]:
+        hgroups.append(sum(([histify(h)/sqrt_hist(histify(group[rindex])) for i,h in enumerate(group) if i != rindex] for group in hgroups), []))
+    elif ratio:
+        hgroups.append(sum(([histify(h)/histify(group[rindex]) for i,h in enumerate(group) if i != rindex] for group in hgroups), []))
 
+    # Processing of hists after ratio
+    for i, hgroup in enumerate(hgroups):
+        if ratio and i == len(hgroups) - 1:
+            continue
+        for j,hist in enumerate(hgroup):
+            if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):
+                norm, nerr = hist.GetBinContent(abs(index)), hist.GetBinError(abs(index)) 
+                den = hist.Clone()
+                for x in den.bins_range():
+                    den.SetBinContent(x, norm)
+                    den.SetBinError(x, nerr)
+                hgroups[i][j] = hist/den
+            if not_empty(kwargs, 'xinefficiency'):
+                hgroups[i][j] = hgroups[i][j]*-1 + 1
     return hgroups
     
 
@@ -225,12 +272,12 @@ def set_scales(axes, logx=False, logy=False, **kwargs):
             ax.set_yscale('log')
 
 
-def normalize(hists, norm='', bin_norm='', index_norm='', **kwargs):
+def normalize(hists, norm='', bin_norm='', index_norm='', overflow=False, **kwargs):
     for hist in hists:
         if norm: 
-            hist.Scale(norm/hist.Integral())
+            hist.Scale(norm/hist.integral(overflow=overflow))
         if index_norm: 
-            hist.Scale(hist[index_norm].Integral()//hist.Integral())
+            hist.Scale(hist[index_norm].Integral()//hist.integral(overflow=overflow))
         if bin_norm:
             for i in hist.bins_range():
                 hist.SetBinContent(i, hist.GetBinContent(i)/hist.GetBinWidth(i))
@@ -256,75 +303,78 @@ def setup_axes(*axes, **kwargs):
     """
 
     # Handle some shortcut syntaxes
-    if 'xticks' in kwargs and kwargs['xticks'] and ('xticklabels' not in kwargs or not kwargs['xticklabels']):
+    if not_empty(kwargs, 'xticks') and not not_empty(kwargs, 'xticklabels'):
         kwargs['xticklabels'] = kwargs['xticks']
 
-    if 'yticks' in kwargs and kwargs['yticks'] and ('yticklabels' not in kwargs or not kwargs['yticklabels']):
+    if not_empty(kwargs, 'yticks') and not not_empty(kwargs, 'yticklabels'):
         kwargs['yticklabels'] = kwargs['yticks']
 
-    if 'xticklabels' in kwargs and kwargs['xticklabels'] == 'jes_cor':
-        kwargs['xticklabels'] = ['30', '300\n' +r'$|\eta| < 0.3$', '2500', '30', '300\n' +r'$0.3 < |\eta| < 0.8$', '2500']
-    if 'yticklabels' in kwargs and kwargs['yticklabels'] == 'jes_cor':
+    if not_empty(kwargs, 'xticklabels') and kwargs['xticklabels'] == 'jes_cor':
+        kwargs['xticklabels'] = ['30', '300\n' +r'$0.8 < |\eta| < 1.1$', '2500', '30', '300\n' +r'$1.1 < |\eta| < 1.4$', '2500']
+    if not_empty(kwargs, 'yticklabels') and kwargs['yticklabels'] == 'jes_cor':
         kwargs['yticklabels'] = ['30', '300', '2500', '30', '300', '2500']
 
-    try:
-        kwargs['xticks'] = [float(x) for x in kwargs['xticks'].split()]
-    except (AttributeError, KeyError):
-        pass
+    if not_empty(kwargs, 'xticks'):
+        try:
+            kwargs['xticks'] = [float(x) for x in kwargs['xticks'].split()]
+        except (AttributeError):
+            pass
 
-    try:
-        kwargs['xticklabels'] = kwargs['xticklabels'].split()
-    except (AttributeError, KeyError):
-        pass
+    if not_empty(kwargs, 'xticklabels'):
+        try:
+            kwargs['xticklabels'] = kwargs['xticklabels'].split()
+        except (AttributeError, KeyError):
+            pass
 
-    try:
-        kwargs['yticks'] = [float(x) for x in kwargs['yticks'].split()]
-    except (AttributeError, KeyError):
-        pass
-
-    try:
-        kwargs['yticklabels'] = kwargs['yticklabels'].split()
-    except (AttributeError, KeyError):
-        pass
+    if not_empty(kwargs, 'yticks'):
+        try:
+            kwargs['yticks'] = [float(x) for x in kwargs['yticks'].split()]
+        except (AttributeError, KeyError):
+            pass
+    if not_empty(kwargs, 'yticklabels'):
+        try:
+            kwargs['yticklabels'] = kwargs['yticklabels'].split()
+        except (AttributeError, KeyError):
+            pass
                          
     # Setup each axis
     for ax in axes:
-        if 'title' in kwargs and kwargs['title'] and ax.primary:
+        if not_empty(kwargs, 'title') and ax.primary:
             # Only put title on the top set of axes
             ax.set_title(kwargs['title'])
 
         if ax.ratio:
             # Use ratio y-axis values
-            if 'rmin' in kwargs and kwargs['rmin'] is not '':
+            if not_empty(kwargs, 'rmin'):
                 ax.set_ylim(bottom=kwargs['rmin'])
-            if 'rmax' in kwargs and kwargs['rmax'] is not '':
+            if not_empty(kwargs, 'rmax'):
                 ax.set_ylim(top=kwargs['rmax'])
-            if 'rlabel' in kwargs and kwargs['rlabel']:
+            if not_empty(kwargs, 'rlabel'):
                 ax.set_ylabel(kwargs['rlabel'], y=1, ha='right')
         else:
             # Use normal y-axis values
-            if 'ymin' in kwargs and kwargs['ymin'] is not '':
+            if not_empty(kwargs, 'ymin'):
                 ax.set_ylim(bottom=kwargs['ymin'])
-            if 'ymax' in kwargs and kwargs['ymax'] is not '':
+            if not_empty(kwargs, 'ymax'):
                 ax.set_ylim(top=kwargs['ymax'])
-            if 'ylabel' in kwargs and kwargs['ylabel']:
+            if not_empty(kwargs, 'ylabel'):
                 ax.set_ylabel(kwargs['ylabel'], y=1, ha='right')
-            if 'yticks' in kwargs and kwargs['yticks']:
+            if not_empty(kwargs, 'yticks'):
                 ax.set_yticks(kwargs['yticks'])
-            if 'yticklabels' in kwargs and kwargs['yticklabels']:
+            if not_empty(kwargs, 'yticklabels'):
                 ax.set_yticklabels(kwargs['yticklabels'])
 
         
-        if 'xmin' in kwargs and kwargs['xmin'] is not '':
+        if not_empty(kwargs, 'xmin'):
             ax.set_xlim(left=kwargs['xmin'])
-        if 'xmax' in kwargs and kwargs['xmax'] is not '':
+        if not_empty(kwargs, 'xmax'):
             ax.set_xlim(right=kwargs['xmax'])
 
-        if 'xlabel' in kwargs and kwargs['xlabel']:
+        if not_empty(kwargs, 'xlabel'):
             ax.set_xlabel(kwargs['xlabel'], x=1, ha='right')        
-        if 'xticks' in kwargs and kwargs['xticks']:
+        if not_empty(kwargs, 'xticks'):
             ax.set_xticks(kwargs['xticks'])
-        if 'xticklabels' in kwargs and kwargs['xticklabels']:
+        if not_empty(kwargs, 'xticklabels'):
             if 'xtickrot' in kwargs:
                 ax.set_xticklabels(kwargs['xticklabels'], rotation=kwargs['xtickrot'])
             else:
@@ -347,6 +397,8 @@ def setup_axes(*axes, **kwargs):
             ax.set_xlabel("")
         axes[-1].yaxis.set_major_locator(ticker.MaxNLocator(4, prune='upper'))
         axes[-1].yaxis.grid(True) # Show lines on tick marks
+        if not_empty(kwargs, 'ratio_sb') and kwargs['ratio_sb']:
+            axes[-1].yaxis.get_major_formatter().set_powerlimits((-1,1))
 
         
 def text(ax, text=None, text_location="upper left", **kwargs):
@@ -414,7 +466,7 @@ def plot(draw, name, hists, **kwargs):
     normalize(hists, **kwargs)
     
     # Split histograms into group for each axes
-    hgroups = group_hists(hists, **kwargs)
+    hgroups = process_hists(hists, **kwargs)
 
     # It might be necessary for some plotting functions to set approx ylims first?
     # Come back to this...
@@ -433,9 +485,10 @@ def plot(draw, name, hists, **kwargs):
     """
 
     for ax, group in izip(axes, hgroups):
-        draw(ax, group)
-        if ax.primary: text(ax, **kwargs)
-        legend(ax, group, **kwargs)
+        draw(ax, group, **kwargs)
+        if draw != draw2d:
+            if ax.primary: text(ax, **kwargs)
+            legend(ax, group, **kwargs)
 
     # Setup axes last so that nothing gets overwritten
     setup_axes(*axes, **kwargs)
@@ -537,7 +590,7 @@ def herr(ax, hists, **kwargs):
     defaults.update(kwargs)
     hist(ax, hists, **defaults)
     for h in make_iterable(hists):
-        eb = rplt.errorbar(hists, axes=ax, fmt='none', xerr=None, label='', capsize=0, elinewidth=h.linewidth)
+        eb = rplt.errorbar(h, axes=ax, fmt='none', xerr=None, label='', capsize=0, elinewidth=h.linewidth)
         eb[-1][0].set_linestyle(h.linestyle) 
         
 def stack(ax, hists, **kwargs):
@@ -547,11 +600,13 @@ def stack(ax, hists, **kwargs):
     defaults.update(kwargs)
     rplt.hist(hists, axes=ax, **defaults)
 
-def hist2d(ax, hists, **kwargs):
-    if "logz" in kwargs and kwargs.pop("logz"):
+def hist2d(ax, hists, logz=False, **kwargs):
+    if logz:
         kwargs["norm"] = LogNorm()
-    defaults = {"colorbar":True, "cmap":"Oranges"}
+    defaults = {"colorbar":True}
     defaults.update(kwargs)
+    if not not_empty(kwargs, 'cmap'):
+        kwargs['cmap'] = 'Blues'
     rplt.hist2d(hists, axes=ax, **defaults)
 
 _plot_functions = {"errorbar":errorbar,
@@ -562,7 +617,7 @@ _plot_functions = {"errorbar":errorbar,
                    "step":step,
                    "steperr":steperr}
 
-def draw1d(ax, hists):
+def draw1d(ax, hists, **kwargs):
     stacked = [h for h in hists if h.drawstyle == 'stack']
     unstacked = [h for h in hists if h.drawstyle != 'stack']
     if stacked: stack(ax, stacked)
@@ -573,8 +628,8 @@ def draw1d(ax, hists):
         _plot_functions[h.drawstyle](ax, h)
 
 
-def draw2d(ax, hists):
-    hist2d(ax, hists[0])
+def draw2d(ax, hists, logz=False, **kwargs):
+    hist2d(ax, hists[0], logz=logz, cmap=hists[0].cmap)
 
 # ----------------------------------------
 # ROOT Helpers
@@ -594,22 +649,6 @@ def fit(hists, functions):
         errors.append(param_errors)
     return graphs, pars, errors
 
-def efficiency(h1, h2):
-    eff = Graph()
-    eff.Divide(h1,h2,"cl=0.683 b(1,1) mode")
-    return eff
-
-def saveable(selection):
-    replacers = [(" ",""),
-                 ("&&","_"),
-                 (">=","ge"),
-                 ("<=","le"),
-                 (">","g"),
-                 ("<","l"),
-                 ("==","e")]
-    for s,r in replacers:
-        selection = selection.replace(s,r)
-    return selection
     
 # ----------------------------------------
 # Command Line Plotting
@@ -635,7 +674,7 @@ def main(args):
         with open(args.batch) as f:
             lines = f.readlines()
         # Maybe ship this out in parallel?
-        for next_args in lines:
+        for next_args in (l for l in lines if l.strip() != ""):
             try:
                 main(shlex.split(next_args))
             except BaseException as e:
