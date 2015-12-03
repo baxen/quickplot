@@ -22,7 +22,7 @@ import atexit
 import argparse
 import rootpy.io.pickler as pickle
 
-from helpers import not_empty
+from helpers import *
 
 from rootpy import asrootpy
 from rootpy.tree import Tree, TreeChain
@@ -89,13 +89,6 @@ def join_labels(s1, s2):
         return s1
     return ', '.join((s1,s2))
     
-
-
-def efficiency_divide(h1, h2):
-    ''' Efficiency with correct errors from numerator and denominator hists '''
-    eff = Graph()
-    eff.Divide(h1,h2,"cl=0.683 b(1,1) mode")
-    return eff
 
 
 def collect_files(path, extension=".root", exclude=".part"):
@@ -358,6 +351,8 @@ def retrieve_all(variables, selection=""):
         # or "varname" to loop over all subsamples
         if sample:
             indices = [variable_args['sample'].index(sample)]
+            if not_empty(variable_args, 'reduction'):
+                indices.append(indices[0] + 1)
         else:
             indices = range(len(make_iterable(variable_args['sample'])))
 
@@ -386,6 +381,22 @@ def retrieve_all(variables, selection=""):
             else:
                 hists.append(retrieve(sample_args, tmp_args, selection))
 
+        if not_empty(variable_args,'reduction'):
+            for i in xrange(-1*len(indices),0,2):
+                if variable_args['reduction'] == 'sbp':
+                    srootb = running_integral(hists[i])/sqrt_hist(running_integral(hists[i+1]))
+                if variable_args['reduction'] == 'sbn':
+                    srootb = running_integral(hists[i],neg=True)/sqrt_hist(running_integral(hists[i+1],neg=True))
+                if variable_args['reduction'] == 'sbp' or variable_args['reduction'] == 'sbn':
+                    seff = efficiency_divide(running_integral(hists[i]), flat_integral(hists[i]))
+                    g = Graph(len(list(seff.y())))
+                    for j, (x,xerr,y,yerr) in enumerate(izip(seff.y(), seff.yerr(), srootb.y(), srootb.yerr())):
+                        g.set_point(j,1-x,y)
+                        g.set_point_error(j,0,0,yerr[0],yerr[1])
+                    g.decorate(hists[i])
+                    g.title = hists[i].title
+                    hists[i] = g
+            del hists[-1*len(indices)+1::2]
     return hists
 
     

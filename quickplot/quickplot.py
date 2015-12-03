@@ -24,8 +24,7 @@ import matplotlib
 matplotlib.use('PDF')
 
 import retrieve
-from helpers import not_empty
-from math import sqrt
+from helpers import *
 
 # Right now this uses an adaptable system:
 #   Full latex support
@@ -85,7 +84,7 @@ from rootpy.io import root_open
 from rootpy.tree import Tree, TreeChain
 from rootpy.plotting import Hist
 
-from itertools import izip, chain
+from itertools import izip, chain, product
 
 
 set_style('ATLAS',mpl=True)
@@ -115,33 +114,6 @@ def make_iterable(x):
     if not is_listy(x):
         return [x]
     return x
-
-def histify(plottable):
-    if 'Hist' in plottable.__class__.__name__:
-        return plottable
-    elif 'Graph' in plottable.__class__.__name__:
-        bins = [(x-err[0],x+err[1]) for x,err in izip(plottable.x(), plottable.xerr())]
-        bins = [x[0] for x in bins] + [bins[-1][1]]
-        hist = Hist(bins)
-        for i,y,yerr in izip(hist.bins_range(), plottable.y(), plottable.yerr()):
-            hist.SetBinContent(i, y)
-            hist.SetBinError(i, 0.5*(yerr[0]+yerr[1]))
-        # Transfer all the graphic properties
-        hist.decorate(plottable)
-        hist.title = plottable.title
-        return hist
-    else:
-        raise TypeError("Don't know how to create a histogram from " + plottable.__class__.__name__)
-
-def sqrt_hist(hist):
-    hist = hist.Clone()
-    for i in hist.bins_range():
-        rel_unc = hist.GetBinError(i)/hist.GetBinContent(i)
-        hist.SetBinContent(i,sqrt(hist.GetBinContent(i)))
-        hist.SetBinError(i, hist.GetBinContent(i) * rel_unc * .05)
-    return hist
-        
-        
 
 """
 def set_font(font="helvetica"):
@@ -210,17 +182,7 @@ def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
     for j,hist in enumerate(hists):
         if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):
             index = int(kwargs['xefficiency']) if not_empty(kwargs, 'xefficiency') else int(kwargs['xinefficiency'])
-            num = hist.Clone()
-            for x in num.bins_range(overflow=True):
-                if index < 0:
-                    # Integral up to the value
-                    y,yerr = hist.integral(xbin2=x, error=True, overflow=True)
-                else:
-                    # Integral starting at the value
-                    y,yerr = hist.integral(xbin1=x, error=True, overflow=True) 
-                num.SetBinContent(x,y)
-                num.SetBinError(x,yerr)
-            hists[j] = num
+            hists[j] = running_integral(hist, neg=index<0)
         if not_empty(kwargs, 'overflow') and kwargs['overflow']:
             # Add overflow to last bin for plotting
             hist[hist.bins_range()[-1]] += hist[hist.bins_range(overflow=True)[-1]]
@@ -242,13 +204,7 @@ def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
         if ratio and i == len(hgroups) - 1:
             continue
         for j,hist in enumerate(hgroup):
-            if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):
-                norm, nerr = hist.GetBinContent(abs(index)), hist.GetBinError(abs(index)) 
-                den = hist.Clone()
-                for x in den.bins_range():
-                    den.SetBinContent(x, norm)
-                    den.SetBinError(x, nerr)
-                hgroups[i][j] = hist/den
+            if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):                hgroups[i][j] = efficiency_divide(hist,flat_hist(hist,index))
             if not_empty(kwargs, 'xinefficiency'):
                 hgroups[i][j] = hgroups[i][j]*-1 + 1
     return hgroups
@@ -272,10 +228,12 @@ def set_scales(axes, logx=False, logy=False, **kwargs):
             ax.set_yscale('log')
 
 
-def normalize(hists, norm='', bin_norm='', index_norm='', overflow=False, **kwargs):
+def normalize(hists, norm='', first_norm='', bin_norm='', index_norm='', overflow=False, **kwargs):
     for hist in hists:
         if norm: 
             hist.Scale(norm/hist.integral(overflow=overflow))
+        if first_norm:
+            hist.Scale(1.0/hist[1])
         if index_norm: 
             hist.Scale(hist[index_norm].Integral()//hist.integral(overflow=overflow))
         if bin_norm:
@@ -354,9 +312,9 @@ def setup_axes(*axes, **kwargs):
         else:
             # Use normal y-axis values
             if not_empty(kwargs, 'ymin'):
-                ax.set_ylim(bottom=kwargs['ymin'])
+                ax.set_ylim(bottom=float(kwargs['ymin']))
             if not_empty(kwargs, 'ymax'):
-                ax.set_ylim(top=kwargs['ymax'])
+                ax.set_ylim(top=float(kwargs['ymax']))
             if not_empty(kwargs, 'ylabel'):
                 ax.set_ylabel(kwargs['ylabel'], y=1, ha='right')
             if not_empty(kwargs, 'yticks'):
@@ -366,9 +324,9 @@ def setup_axes(*axes, **kwargs):
 
         
         if not_empty(kwargs, 'xmin'):
-            ax.set_xlim(left=kwargs['xmin'])
+            ax.set_xlim(left=float(kwargs['xmin']))
         if not_empty(kwargs, 'xmax'):
-            ax.set_xlim(right=kwargs['xmax'])
+            ax.set_xlim(right=float(kwargs['xmax']))
 
         if not_empty(kwargs, 'xlabel'):
             ax.set_xlabel(kwargs['xlabel'], x=1, ha='right')        
@@ -483,7 +441,7 @@ def plot(draw, name, hists, **kwargs):
         else: ymax = h + .1*(h-l)
     ax.set_ylim(top=ymax)
     """
-
+    
     for ax, group in izip(axes, hgroups):
         draw(ax, group, **kwargs)
         if draw != draw2d:
@@ -497,6 +455,7 @@ def plot(draw, name, hists, **kwargs):
         fig.savefig(name, dpi=500)
     else:
         fig.savefig(name)
+    fig.clear()
 
 
 # ----------------------------------------
@@ -598,16 +557,17 @@ def stack(ax, hists, **kwargs):
                 'capsize':0,
                 'yerr':None}
     defaults.update(kwargs)
-    rplt.hist(hists, axes=ax, **defaults)
+    rplt.hist(hists[::-1], axes=ax, **defaults)
 
-def hist2d(ax, hists, logz=False, **kwargs):
-    if logz:
-        kwargs["norm"] = LogNorm()
+def hist2d(ax, hist, logz=False, numbers=False, cmap='Blues', **kwargs):
     defaults = {"colorbar":True}
-    defaults.update(kwargs)
-    if not not_empty(kwargs, 'cmap'):
-        kwargs['cmap'] = 'Blues'
-    rplt.hist2d(hists, axes=ax, **defaults)
+    if logz:
+        defaults["norm"] = LogNorm()
+    defaults['cmap'] = cmap
+    rplt.hist2d(hist, axes=ax, **defaults)
+    if numbers:
+        for (x,y),z in izip(product(hist.x(), hist.y()), chain(*hist.z())):
+            ax.text(x, y, "{:.3g}".format(z), va='center', ha='center')
 
 _plot_functions = {"errorbar":errorbar,
                    "hist":hist,
@@ -629,7 +589,7 @@ def draw1d(ax, hists, **kwargs):
 
 
 def draw2d(ax, hists, logz=False, **kwargs):
-    hist2d(ax, hists[0], logz=logz, cmap=hists[0].cmap)
+    hist2d(ax, hists[0], logz=logz, cmap=hists[0].cmap, **kwargs)
 
 # ----------------------------------------
 # ROOT Helpers
@@ -673,6 +633,7 @@ def main(args):
     if args.batch:
         with open(args.batch) as f:
             lines = f.readlines()
+        lines = [l.split("#")[0] for l in lines]
         # Maybe ship this out in parallel?
         for next_args in (l for l in lines if l.strip() != ""):
             try:
