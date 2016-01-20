@@ -34,6 +34,17 @@ def histify(plottable):
     else:
         raise TypeError("Don't know how to create a histogram from " + plottable.__class__.__name__)
 
+def xscale(hist, scale):
+    bins = list(hist.xedges())
+    h = Hist([b*scale for b in bins])
+    for b1,b2 in izip(h.bins(),hist.bins()):
+        b1.value = b2.value
+        b1.error = b2.error
+    h.decorate(hist)
+    h.title = hist.title
+    h.drawstyle = hist.drawstyle
+    return h
+
 def efficiency_divide(h1, h2):
     ''' Efficiency with correct errors from numerator and denominator hists '''
     eff = Graph()
@@ -44,8 +55,6 @@ def efficiency_divide(h1, h2):
 
 def sqrt_hist(hist):
     hist = hist.Clone()
-    print hist.title
-    hist.Print('all')
     for i in hist.bins_range():
         rel_unc = hist.GetBinError(i)/hist.GetBinContent(i)
         hist.SetBinContent(i,sqrt(hist.GetBinContent(i)))

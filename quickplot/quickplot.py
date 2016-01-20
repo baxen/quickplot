@@ -180,6 +180,8 @@ def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
     
     # Processing of hists prior to ratio
     for j,hist in enumerate(hists):
+        if not_empty(kwargs, 'xscale'):
+            hists[j] = xscale(hist, kwargs['xscale'])
         if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):
             index = int(kwargs['xefficiency']) if not_empty(kwargs, 'xefficiency') else int(kwargs['xinefficiency'])
             hists[j] = running_integral(hist, neg=index<0)
@@ -204,7 +206,8 @@ def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
         if ratio and i == len(hgroups) - 1:
             continue
         for j,hist in enumerate(hgroup):
-            if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):                hgroups[i][j] = efficiency_divide(hist,flat_hist(hist,index))
+            if not_empty(kwargs, 'xefficiency') or not_empty(kwargs,'xinefficiency'):
+                hgroups[i][j] = efficiency_divide(hist,flat_hist(hist,index))
             if not_empty(kwargs, 'xinefficiency'):
                 hgroups[i][j] = hgroups[i][j]*-1 + 1
     return hgroups
@@ -322,7 +325,6 @@ def setup_axes(*axes, **kwargs):
             if not_empty(kwargs, 'yticklabels'):
                 ax.set_yticklabels(kwargs['yticklabels'])
 
-        
         if not_empty(kwargs, 'xmin'):
             ax.set_xlim(left=float(kwargs['xmin']))
         if not_empty(kwargs, 'xmax'):
@@ -337,6 +339,7 @@ def setup_axes(*axes, **kwargs):
                 ax.set_xticklabels(kwargs['xticklabels'], rotation=kwargs['xtickrot'])
             else:
                 ax.set_xticklabels(kwargs['xticklabels'])
+
         if ax.get_xscale() != 'log':
             ax.xaxis.set_minor_locator(ticker.AutoMinorLocator())
         if ax.get_yscale() != 'log':
@@ -396,7 +399,7 @@ def legend(ax, hists, legend_loc='best', legend_text=None, **kwargs):
     if legend_text == "PRELIM":
         legend_text = PRELIM
         
-    legend = ax.legend(frameon=False, loc=legend_loc, prop={'size':18}, labelspacing=0.25, ncol=1 if len(hists) < 5 else 2)
+    legend = ax.legend(frameon=False, loc=legend_loc if legend_loc else 'best', prop={'size':18}, labelspacing=0.25, ncol=1 if len(hists) < 5 else 2)
 
     # Add extra text above legend.
     if legend_text and legend_text is not "none":
@@ -455,7 +458,7 @@ def plot(draw, name, hists, **kwargs):
         fig.savefig(name, dpi=500)
     else:
         fig.savefig(name)
-    fig.clear()
+    plt.close(fig)
 
 
 # ----------------------------------------

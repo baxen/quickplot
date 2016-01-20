@@ -57,7 +57,7 @@ def _join_selection(s1,s2):
         return s2
     if s2 == '' or s2 is None:
         return s1
-    return '(' + s1 + ') && (' + s2 + ')'
+    return '(' + str(s1) + ') && (' + str(s2) + ')'
 
 
 def join_selections(s1, s2):
@@ -351,8 +351,11 @@ def retrieve_all(variables, selection=""):
         # or "varname" to loop over all subsamples
         if sample:
             indices = [variable_args['sample'].index(sample)]
-            if not_empty(variable_args, 'reduction'):
+            if not_empty(variable_args, 'reduce2'):
                 indices.append(indices[0] + 1)
+            if not_empty(variable_args, 'reduce3'):
+                indices.append(indices[0] + 1)
+                indices.append(indices[0] + 2)
         else:
             indices = range(len(make_iterable(variable_args['sample'])))
 
@@ -381,13 +384,13 @@ def retrieve_all(variables, selection=""):
             else:
                 hists.append(retrieve(sample_args, tmp_args, selection))
 
-        if not_empty(variable_args,'reduction'):
+        if not_empty(variable_args,'reduce2'):
             for i in xrange(-1*len(indices),0,2):
-                if variable_args['reduction'] == 'sbp':
+                if variable_args['reduce2'] == 'sbp':
                     srootb = running_integral(hists[i])/sqrt_hist(running_integral(hists[i+1]))
-                if variable_args['reduction'] == 'sbn':
+                if variable_args['reduce2'] == 'sbn':
                     srootb = running_integral(hists[i],neg=True)/sqrt_hist(running_integral(hists[i+1],neg=True))
-                if variable_args['reduction'] == 'sbp' or variable_args['reduction'] == 'sbn':
+                if variable_args['reduce2'] == 'sbp' or variable_args['reduce2'] == 'sbn':
                     seff = efficiency_divide(running_integral(hists[i]), flat_integral(hists[i]))
                     g = Graph(len(list(seff.y())))
                     for j, (x,xerr,y,yerr) in enumerate(izip(seff.y(), seff.yerr(), srootb.y(), srootb.yerr())):
@@ -397,6 +400,14 @@ def retrieve_all(variables, selection=""):
                     g.title = hists[i].title
                     hists[i] = g
             del hists[-1*len(indices)+1::2]
+
+        if not_empty(variable_args,'reduce3'):
+            for i in xrange(-1*len(indices),0,3):
+                if variable_args['reduce3'] == 'ceff':
+                    hists[i] = efficiency_divide(hists[i],hists[i+2] - hists[i+1]*2.0)
+            del hists[-1*len(indices)+1::3] # Delete each third histogram
+            del indices[1::3]
+            del hists[-1*len(indices)+1::2] # Delete each second histogram
     return hists
 
     
