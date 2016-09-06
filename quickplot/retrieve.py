@@ -27,7 +27,6 @@ from helpers import *
 from rootpy import asrootpy
 from rootpy.tree import Tree, TreeChain
 from itertools import izip, izip_longest
-from seaborn.apionly import color_palette, husl_palette
 from rootpy.plotting import Hist, Hist2D, Profile, Graph
 from rootpy.io import root_open
 
@@ -103,22 +102,37 @@ def collect_files(path, extension=".root", exclude=".part"):
     files = [os.path.abspath(f) for f in files if ".part" not in f]
     files = [os.path.abspath(f) for f in files if ".part" not in f]
     eosmount = os.path.join(os.environ["HOME"],"eos")
-    return [f.replace(eosmount, "root://eosatlas//eos") for f in files]
+    return [f.replace(eosmount, "root://eosatlas//eos") for f in files][:200]
 
 
 def load(hname, path):
     """
     Load a histogram from each root file in path and add them together
     """
+    # Protection for passing in unicode strings, which break rootpy `get`
+    hname, path = str(hname), str(path)
+
     files = collect_files(path)
     hists = []
     for fname in files:
         with root_open(fname) as f:
-            hists.append(f.Get(hname).Clone())
+            hists.append(f.get(hname).Clone())
             hists[-1].SetDirectory(0)
     if len(hists) > 1:
         map(hists[0].Add, hists[1:])
     return hists[0]
+
+def load_chain(path):
+    files = collect_files(path)
+    # Test first file to find the tree name
+    possible_trees = ['outputTree', 'ntupOutput', 'CollectionTree']
+    with root_open(files[0]) as tmp:
+        for tree in possible_trees:
+            if tmp.find_key(tree):
+                break
+        else:
+            raise IOError("Could not find a valid tree in the specified root files.")
+    return TreeChain(tree, collect_files(path))
 
 
 def fill(hist, path, variable, selection="", options="", weight=1.0):
@@ -133,20 +147,11 @@ def fill(hist, path, variable, selection="", options="", weight=1.0):
     """
     if weight == "":
         weight = 1.0
-    selection = str(weight) + "*(" + selection + ")" if selection else ""
+    selection = str(weight) + "*(" + str(selection) + ")" if selection else str(weight)
 
     print variable, selection
-    
-    files = collect_files(path)
-    # Test first file to find the tree name
-    possible_trees = ['outputTree', 'ntupOutput', 'CollectionTree']
-    with root_open(files[0]) as tmp:
-        for tree in possible_trees:
-            if tmp.find_key(tree):
-                break
-        else:
-            raise IOError("Could not find a valid tree in the specified root files.")
-    chain = TreeChain(tree, collect_files(path))
+
+    chain = load_chain(path)
     chain.Draw(variable, selection=selection, options=options, hist=hist)
     return hist
 
@@ -260,7 +265,6 @@ def _retrieve_ntuple(variable, bins, subsamples, selections='', weights=1.0, pro
     # ----------------------------------------
     # Special Cases for Histograms
     # ----------------------------------------
-    
     if efficiency:
         # Efficiency string specifies numerator selection if provided
         if variable.count(":") == 1:
@@ -305,7 +309,7 @@ def retrieve(sample_args, variable_args, selection='', name=''):
     args['selection'] = join_selections(args['selection'], selection)
 
     bins = args["bins"]
-    if bins: # Bins provided, means we are reading an ntuple
+    if bins and bins != "none": # Bins provided, means we are reading an ntuple
         if "(" in bins:
             bins = bins.strip("()").split(",")
             if len(bins) == 3:

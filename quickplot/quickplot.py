@@ -32,9 +32,6 @@ from helpers import *
 
 # I would like to upgrade to pgf based output if they work out bugs
 
-
-from seaborn.apionly import color_palette
-
 custom_preamble = {
     'font.size'          : 20, # default is too small
     'figure.autolayout'  : True,
@@ -73,6 +70,7 @@ import rootpy.plotting.root2matplotlib as rplt
 
 import matplotlib.ticker as ticker
 import matplotlib.offsetbox as offsetbox
+import matplotlib.patches as mpatches
 
 import rootpy.ROOT as ROOT
 from rootpy.plotting.style import set_style
@@ -104,8 +102,10 @@ matplotlib.rcParams['text.latex.preamble'] =  [r'\usepackage{tgheros}',    # hel
 # ----------------------------------------
 
 canvas_json = 'canvas.json'
-INTERNAL = r'$\textbf{\textit{ATLAS} Internal}$'
+SIM_INTERNAL = r'$\textbf{\textit{ATLAS} Simulation Internal}$'
+INTERNAL = r'$\textbf{\textit{ATLAS}}$'
 PRELIM = r'$\textbf{\textit{ATLAS} Preliminary}$'
+#PRELIM = r'$\textbf{\textit{ATLAS}}$'
 
 def is_listy(x):
     return any(isinstance(x, t) for t in [types.TupleType,types.ListType])
@@ -152,20 +152,26 @@ def build_axes(ratio=False, double=False, **kwargs):
 
     # Single axes and ratio
     elif ratio:
-        fig = plt.figure(figsize=(8.0, 6.0))
+        fig = plt.figure(figsize=(9.0, 6.0))
         gs = gridspec.GridSpec(2,1,height_ratios=[3,1], hspace=0.0, wspace=0.0)
         ax = plt.subplot(gs[0])
         axes = [ax, plt.subplot(gs[1], sharex=ax)]
 
     # Single axis
     else:
-        fig = plt.figure()
+        if 'customization' in kwargs and kwargs['customization'] == 'jes_cor':
+            fig = plt.figure(figsize=(8.0,7.0))
+        else:
+            fig = plt.figure()
         axes = [fig.add_subplot(111)]
 
     for ax in axes:
         ax.ratio = False
         ax.primary = False
+        ax.secondary = False
+        ax.extra_handles = []
     axes[0].primary = True
+    if double: axes[-2].secondary = True
     if ratio: axes[-1].ratio = True
 
     return fig, axes
@@ -188,7 +194,18 @@ def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
         if not_empty(kwargs, 'overflow') and kwargs['overflow']:
             # Add overflow to last bin for plotting
             hist[hist.bins_range()[-1]] += hist[hist.bins_range(overflow=True)[-1]]
+    if not_empty(kwargs, 'errorbands') and kwargs['errorbands']:
+        for i in xrange(1,len(hists)):
+            htop = hists[0] + hists[i]
+            htop.decorate(hists[i])
+            htop.title = hists[i].title
+            hbot = hists[0] - hists[i]
+            hbot.decorate(hists[i])
+            hbot.title = "" # make sure only one gets a legend entry
+            hists[i] = htop
+            hists.append(hbot)
 
+                
     # If two axes, half go on each in order
     if double:
         hgroups = [hists[:len(hists)/2], hists[len(hists)/2:]]
@@ -196,7 +213,9 @@ def process_hists(hists, ratio=False, double=False, rindex=0, **kwargs):
         hgroups = [hists]
     
     # If ratio, create a ratio from each hist by dividing by the histogram at rindex for each group
-    if ratio and not_empty(kwargs, "ratio_sb") and kwargs["ratio_sb"]:
+    if ratio=='paired':
+        hgroups.append(sum(([histify(group[i])/histify(group[i-1]) for i in xrange(1,len(group),2)] for group in hgroups), []))
+    elif ratio=='sb':
         hgroups.append(sum(([histify(h)/sqrt_hist(histify(group[rindex])) for i,h in enumerate(group) if i != rindex] for group in hgroups), []))
     elif ratio:
         hgroups.append(sum(([histify(h)/histify(group[rindex]) for i,h in enumerate(group) if i != rindex] for group in hgroups), []))
@@ -231,18 +250,24 @@ def set_scales(axes, logx=False, logy=False, **kwargs):
             ax.set_yscale('log')
 
 
-def normalize(hists, norm='', first_norm='', bin_norm='', index_norm='', overflow=False, **kwargs):
+def normalize(hists, rebin='', norm='', first_norm='', bin_norm='', index_norm='', range_norm='', overflow=False, **kwargs):
     for hist in hists:
+        if rebin:
+            hist.rebin(int(rebin))
         if norm: 
-            hist.Scale(norm/hist.integral(overflow=overflow))
+            hist.Scale(float(norm)/hist.integral(overflow=overflow))
         if first_norm:
             hist.Scale(1.0/hist[1])
         if index_norm: 
             hist.Scale(hist[index_norm].Integral()//hist.integral(overflow=overflow))
+        if range_norm:
+            low, high = [float(s) for s in range_norm.split(',')]
+            hist.Scale(hists[0].integral(hist.find_bin(low), hist.find_bin(high))/hist.integral(hist.find_bin(low), hist.find_bin(high)))
         if bin_norm:
             for i in hist.bins_range():
                 hist.SetBinContent(i, hist.GetBinContent(i)/hist.GetBinWidth(i))
                 hist.SetBinError(i, hist.GetBinError(i)/hist.GetBinWidth(i)) 
+            
 
 
 def setup_axes(*axes, **kwargs):
@@ -270,11 +295,6 @@ def setup_axes(*axes, **kwargs):
     if not_empty(kwargs, 'yticks') and not not_empty(kwargs, 'yticklabels'):
         kwargs['yticklabels'] = kwargs['yticks']
 
-    if not_empty(kwargs, 'xticklabels') and kwargs['xticklabels'] == 'jes_cor':
-        kwargs['xticklabels'] = ['30', '300\n' +r'$0.8 < |\eta| < 1.1$', '2500', '30', '300\n' +r'$1.1 < |\eta| < 1.4$', '2500']
-    if not_empty(kwargs, 'yticklabels') and kwargs['yticklabels'] == 'jes_cor':
-        kwargs['yticklabels'] = ['30', '300', '2500', '30', '300', '2500']
-
     if not_empty(kwargs, 'xticks'):
         try:
             kwargs['xticks'] = [float(x) for x in kwargs['xticks'].split()]
@@ -295,6 +315,17 @@ def setup_axes(*axes, **kwargs):
     if not_empty(kwargs, 'yticklabels'):
         try:
             kwargs['yticklabels'] = kwargs['yticklabels'].split()
+        except (AttributeError, KeyError):
+            pass
+                         
+    if not_empty(kwargs, 'rticks'):
+        try:
+            kwargs['rticks'] = [float(x) for x in kwargs['rticks'].split()]
+        except (AttributeError, KeyError):
+            pass
+    if not_empty(kwargs, 'rticklabels'):
+        try:
+            kwargs['rticklabels'] = kwargs['rticklabels'].split()
         except (AttributeError, KeyError):
             pass
                          
@@ -323,7 +354,10 @@ def setup_axes(*axes, **kwargs):
             if not_empty(kwargs, 'yticks'):
                 ax.set_yticks(kwargs['yticks'])
             if not_empty(kwargs, 'yticklabels'):
-                ax.set_yticklabels(kwargs['yticklabels'])
+                if 'ytickrot' in kwargs:
+                    ax.set_yticklabels(kwargs['yticklabels'], rotation=kwargs['ytickrot'])
+                else:
+                    ax.set_yticklabels(kwargs['yticklabels'])
 
         if not_empty(kwargs, 'xmin'):
             ax.set_xlim(left=float(kwargs['xmin']))
@@ -357,12 +391,24 @@ def setup_axes(*axes, **kwargs):
                 tick.set_visible(False)
             ax.set_xlabel("")
         axes[-1].yaxis.set_major_locator(ticker.MaxNLocator(4, prune='upper'))
+        # Show a line at 1.0 if it's in range
+        if axes[-1].get_ylim()[0] < 1.0 < axes[-1].get_ylim()[1]:
+            axes[-1].plot(axes[-1].get_xlim(), [1.0,1.0], color='#B3B3B3', linewidth=2.0,linestyle='--')
         axes[-1].yaxis.grid(True) # Show lines on tick marks
         if not_empty(kwargs, 'ratio_sb') and kwargs['ratio_sb']:
             axes[-1].yaxis.get_major_formatter().set_powerlimits((-1,1))
+        if not_empty(kwargs, 'rticks'):
+            axes[-1].set_yticks(kwargs['rticks'])
+        if not_empty(kwargs, 'rticklabels'):
+            axes[-1].set_yticklabels(kwargs['rticklabels'])
+
+
 
         
-def text(ax, text=None, text_location="upper left", **kwargs):
+def text(ax, secondary=False, text=None, text_location="upper left", text_secondary=None, text_location_secondary="upper left", **kwargs):
+    if secondary:
+        text = text_secondary
+        text_location = text_location_secondary
     if text:
         locations = {'best': 0,
                      'upper right':1,
@@ -375,12 +421,22 @@ def text(ax, text=None, text_location="upper left", **kwargs):
                      'lower center':8,
                      'upper center':9,
                      'center':10}
+        bbox = {}
         if text_location in locations:
             text_location = locations[text_location]
+        elif text_location in locations.values():
+            pass
+        elif '(' in text_location:
+            # Specify x,y coordinates for upper left corner
+            bbox['bbox_to_anchor'] = tuple(float(x) for x in text_location[1:-1].split(','))
+            bbox['bbox_transform'] = ax.transAxes
+            text_location = 2
+
+        text = text.replace("SIM_INTERNAL", SIM_INTERNAL)
         text = text.replace("INTERNAL", INTERNAL)
         text = text.replace("PRELIM", PRELIM)
         text = text.replace(";", "\n")
-        anchored = AnchoredText(text, prop=dict(size=18), loc=text_location, frameon=False)
+        anchored = AnchoredText(text, prop=dict(size=18), loc=text_location, frameon=False, **bbox)
         ax.add_artist(anchored)
 
 
@@ -392,6 +448,13 @@ def legend(ax, hists, legend_loc='best', legend_text=None, **kwargs):
     # Don't make a legend on the ratio plot
     if ax.ratio:
         return
+    
+    bbox = {}
+    # Specify x,y coordinates for upper left corner
+    if '(' in legend_loc:
+        bbox['bbox_to_anchor'] = tuple(float(x) for x in text_location[1:-1].split(','))
+        bbox['bbox_transform'] = ax.transAxes
+        legend_loc = 2
 
     # Shortcut for common labels
     if legend_text == "INTERNAL":
@@ -399,7 +462,14 @@ def legend(ax, hists, legend_loc='best', legend_text=None, **kwargs):
     if legend_text == "PRELIM":
         legend_text = PRELIM
         
-    legend = ax.legend(frameon=False, loc=legend_loc if legend_loc else 'best', prop={'size':18}, labelspacing=0.25, ncol=1 if len(hists) < 5 else 2)
+    handles, labels = ax.get_legend_handles_labels()
+    handles = handles[::-1]
+    labels = labels[::-1]
+    for extra in ax.extra_handles:
+        handles.append(extra)
+        labels.append(extra.get_label())
+
+    legend = ax.legend(handles, labels, frameon=False, loc=legend_loc if legend_loc else 'best', prop={'size':18}, labelspacing=0.25, ncol=1 if len(hists) < 6 else 2, **bbox)
 
     # Add extra text above legend.
     if legend_text and legend_text is not "none":
@@ -410,7 +480,43 @@ def legend(ax, hists, legend_loc='best', legend_text=None, **kwargs):
             box.set_figure(box.figure) 
     return legend
 
+def customize(kwargs, hists):
+        # Handle customizations
+    if  kwargs.get('customization') == 'jes_cor':
+        kwargs['xticks'] = '1 8 16 20 27 35'
+        kwargs['yticks'] = '1 8 16 20 27 35'
+        kwargs['xticklabels'] = ['30', '300\n' +r'$|\eta| < 0.6$', '2500', '30', '300\n' +r'$0.6 < |\eta| < 1.1$', '2500']
+        kwargs['yticklabels'] = ['30', r'\begin{center}$|\eta| < 0.6$\\300\end{center}', '2500', '30', r'\begin{center}$0.6 < |\eta| < 1.1$\\300\end{center}', '2500']
+        kwargs['ytickrot'] = 'vertical'
 
+    if kwargs.get('customization') == 'fig16':
+        hists[0][-4] = 0.0
+    
+    if kwargs.get('customization') == 'systematics':
+        # hists[-2] is the central value, hists[-1] is an upper systematic
+        for bin1,bin2 in zip(hists[-2], hists[-1]): 
+            bin2.error = abs(bin2.value - bin1.value)
+            bin2.value = bin1.value
+
+    if kwargs.get('customization') == 'halfshift':
+        for i,h in enumerate(hists):
+            htmp = Hist([x+0.5 for x in h.xedges()])
+            htmp.decorate(h)
+            htmp.drawstyle = h.drawstyle
+            htmp.title = h.title
+            for bin in h.bins_range():
+                htmp[bin] = h[bin]
+            hists[i] = htmp
+
+    if kwargs.get('customization') == 'ztrunc':
+        for i,h in enumerate(hists):
+            htmp = Hist([0] + list(h.xedges())[1:])
+            htmp.decorate(h)
+            htmp.drawstyle = h.drawstyle
+            htmp.title = h.title
+            for bin in h.bins_range():
+                htmp[bin] = h[bin]
+            hists[i] = htmp
 
 def plot(draw, name, hists, **kwargs):
     """
@@ -418,6 +524,9 @@ def plot(draw, name, hists, **kwargs):
 
     kwargs are passed around to all subfunctions
     """
+
+    customize(kwargs, hists)
+
     fig, axes = build_axes(**kwargs)
 
     # Set log scales first thing, because some functions check for log scales
@@ -447,8 +556,9 @@ def plot(draw, name, hists, **kwargs):
     
     for ax, group in izip(axes, hgroups):
         draw(ax, group, **kwargs)
+        if ax.primary: text(ax, **kwargs)
+        if ax.secondary: text(ax, secondary=True, **kwargs)
         if draw != draw2d:
-            if ax.primary: text(ax, **kwargs)
             legend(ax, group, **kwargs)
 
     # Setup axes last so that nothing gets overwritten
@@ -475,7 +585,6 @@ def errorbar(ax, hists, **kwargs):
     defaults = {"snap":False,
                 "emptybins":False,
                 "capsize":0}
-    defaults.update(kwargs)
     if "logy" in defaults:
         defaults.pop("logy")
     rplt.errorbar(hists, axes=ax, **defaults)
@@ -487,9 +596,8 @@ def band(ax, hists, **kwargs):
     kwargs are passed to fill_between
     """
     # Override some defaults
-    rplt.hist(hists, axes=ax, **kwargs)
+    #rplt.hist(hists, axes=ax, **kwargs)
     defaults = {"linewidth":0.0, "alpha":0.8}
-    defaults.update(kwargs)
     for h in make_iterable(hists):
         b = h.Clone()
         t = h.Clone()
@@ -502,6 +610,9 @@ def band(ax, hists, **kwargs):
         if defaults.get('color') is None:
             defaults['color'] = h.GetLineColor('mpl')
         rplt.fill_between(b, t, axes=ax, **defaults)
+        # Add patch for the legend
+        if h.title:
+            ax.extra_handles.append(mpatches.Patch(color=h.GetLineColor('mpl'), alpha=defaults["alpha"], label=h.title))
     
 def _step(ax, h, **kwargs):
     # Make horizontal line segments
@@ -527,8 +638,13 @@ def step(ax, hists, **kwargs):
 
     kwargs are passed to Axes.plot
     """
-    for h in make_iterable(hists):
-        _step(ax, h, **kwargs)
+    hiter = make_iterable(hists)
+    for h in hiter:
+        if h == hiter[-1] and 'customization' in kwargs and kwargs['customization'] == 'jes_unc':
+            print 'Using updated zorder on ', h.title
+            _step(ax, h, zorder=50)
+        else:
+            _step(ax, h)
 
 def steperr(ax, hists, **kwargs):
     step(ax, hists, **kwargs)
@@ -540,7 +656,6 @@ def hist(ax, hists, **kwargs):
     defaults = {'fill':None,
                 'capsize':0,
                 'stacked':False}
-    defaults.update(kwargs)
     for hist in make_iterable(hists):
         # Need the histify syntax to handle graphs
         rplt.hist(histify(hist), axes=ax, **defaults)
@@ -549,7 +664,6 @@ def herr(ax, hists, **kwargs):
     defaults = {'marker':None,
                 'capsize':0,
                 'stacked':False}
-    defaults.update(kwargs)
     hist(ax, hists, **defaults)
     for h in make_iterable(hists):
         eb = rplt.errorbar(h, axes=ax, fmt='none', xerr=None, label='', capsize=0, elinewidth=h.linewidth)
@@ -559,7 +673,6 @@ def stack(ax, hists, **kwargs):
     defaults = {'fill':'solid',
                 'capsize':0,
                 'yerr':None}
-    defaults.update(kwargs)
     rplt.hist(hists[::-1], axes=ax, **defaults)
 
 def hist2d(ax, hist, logz=False, numbers=False, cmap='Blues', **kwargs):
@@ -588,7 +701,8 @@ def draw1d(ax, hists, **kwargs):
         if h.drawstyle == '': h.drawstyle = 'errorbar'
         if h.drawstyle not in _plot_functions:
             raise PlotError("Do not recognize drawstyle: " + h.drawstyle)
-        _plot_functions[h.drawstyle](ax, h)
+        pargs = dict(customization=kwargs.pop('customization',None))
+        _plot_functions[h.drawstyle](ax, h, **pargs)
 
 
 def draw2d(ax, hists, logz=False, **kwargs):
@@ -625,6 +739,8 @@ def main(args):
     parser.add_argument('--canvas', help="Canvas to use for the plot, if unspecified will start with a blank canvas.")
     parser.add_argument('--selection', help='Additional global selection to apply for all loaded data.')
     parser.add_argument('--batch', help='Specify a file which contains a set of arguments to run on each line.')
+    parser.add_argument('--dump', action='store_true', help='Save all plotted histograms to a root file.')
+    parser.add_argument('--internal', action='store_true', help='Use ATLAS Internal instead of ATLAS label.')
 
     args, extras = parser.parse_known_args(args)
 
@@ -632,6 +748,15 @@ def main(args):
 
     if (not args.output or not len(args.variables)) and not args.batch:
         raise PlotError("Must provide an output name and variable for the plot or a batch file to run on.")
+
+    global INTERNAL
+    global SIM_INTERNAL
+    if args.internal:
+        INTERNAL = r'$\textbf{\textit{ATLAS} Internal}$'
+        SIM_INTERNAL = r'$\textbf{\textit{ATLAS} Simulation Internal}$'
+    else:
+        INTERNAL = r'$\textbf{\textit{ATLAS}}$'
+        SIM_INTERNAL = r'$\textbf{\textit{ATLAS} Simulation}$'
 
     if args.batch:
         with open(args.batch) as f:
@@ -647,6 +772,14 @@ def main(args):
         return
 
     hists = retrieve.retrieve_all(args.variables, args.selection)
+
+    if args.dump:
+        f = root_open(os.path.splitext(args.output)[0] + ".root", "recreate")
+        for h in hists:
+            htmp = histify(h)
+            htmp.name = htmp.title.replace("/","over").replace(" ","_").replace("$","").replace(">","gt").replace(",","").lower()
+            htmp.write()
+        f.close()
 
     if args.canvas:
         with open(canvas_json) as f:    

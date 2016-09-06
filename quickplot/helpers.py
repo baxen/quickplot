@@ -21,6 +21,8 @@ def histify(plottable):
     if 'Hist' in plottable.__class__.__name__:
         return plottable
     elif 'Graph' in plottable.__class__.__name__:
+        if len(list(plottable.x())) == 0:
+            print plottable
         bins = [(x-err[0],x+err[1]) for x,err in izip(plottable.x(), plottable.xerr())]
         bins = [x[0] for x in bins] + [bins[-1][1]]
         hist = Hist(bins)
@@ -51,7 +53,7 @@ def efficiency_divide(h1, h2):
     eff.Divide(h1,h2,"cl=0.683 b(1,1) mode")
     eff.decorate(h1)
     eff.title = h1.title
-    return eff
+    return histify(eff)
 
 def sqrt_hist(hist):
     hist = hist.Clone()
