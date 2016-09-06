@@ -1,12 +1,26 @@
-atlas-code
-==========
+# quickplot
 
-Share anything that makes working on ATLAS faster or easier. 
+Rootpy based plotting for ATLAS publications.
 
-Check out the [website](http://atlas-code.github.io/atlas-code/).
+## Quick Example
 
-## Contributing ##
-Feel free to send pull requests to add material. Code will be added as is: no quality control. If you'd like to make ongoing changes, contact baxen90@gmail.com to get added as a collaborator. 
+Download information from the spreadsheets to use to build plots. You need a samples, variables, and canvas spreadsheet. These get saved to json files.
+```
+python quickplot/sheets.py update example_samples example_variables example_canvas
+```
 
-## Layout ##
-For now, it seems like a good idea to imitate the package system from Athena/RootCore. So put pieces of code in a package folder, and for anything complicated use the standard subfolders (src, python, etc...). 
+Then use them to make a specific plot:
+```
+python ~/atlas-code/quickplot/quickplot.py mass_dedx.pdf --variable mass --canvas mass
+```
+
+Or a batch from a list of command line arguments in a file:
+```
+python ~/atlas-code/quickplot/quickplot.py --batch example.args 
+```
+
+
+
+
+
+
