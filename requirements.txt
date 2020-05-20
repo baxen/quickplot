@@ -12,7 +12,7 @@ enum34==1.0.4
 funcsigs==0.4
 gfal2-util==1.0.0
 gspread==0.2.5
-httplib2==0.9.2
+httplib2==0.18.0
 idna==2.0
 ipaddress==1.0.14
 ipython==3.1.0
